@@ -1,0 +1,442 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Cloudformation Template to create the Infrastructure'
+Parameters:
+  TagName:
+    Type: String
+    Description: Provide a Tag name to identify the Infrastructure
+  Gmail:
+    Type: String
+    Description: Provide a Gmail for Send notification
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the ECS instances.
+  ClusterName:
+    Type: String
+    Description: Name of ECS Cluster
+  AsgDesiredCapacity:
+    Type: Number
+    Default: '1'
+    Description: Number of instances to launch in your ECS cluster.
+  AsgMaxSize:
+    Type: Number
+    Default: '2'
+    Description: Maximum number of instances that can be launched in your ECS cluster.
+  InstanceType:
+    Description: EC2 instance type
+    Type: String
+    Default: t2.micro
+    AllowedValues: [t2.micro, t2.small, t2.medium, t2.large]
+    ConstraintDescription: Please choose a valid instance type.
+Mappings:
+  AWSRegionToAMI:
+    us-east-1:
+      AMIID: ami-03562b14
+    us-east-1:
+      AMIID: ami-1924770e
+Resources:
+  VPC:
+    Type: "AWS::EC2::VPC"
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref 'TagName', '-vpc']]
+  PublicSubnetAZ1:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: ""
+      CidrBlock: 10.0.1.0/24
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref 'TagName', '-PublicSubnetAZ1']]
+  PublicSubnetAZ2:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: ""
+      CidrBlock: 10.0.2.0/24
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref 'TagName', '-PublicSubnetAZ2']]
+  PrivateSubnetAZ1:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: ""
+      CidrBlock: 10.0.3.0/24
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref 'TagName', '-PrivateSubnetAZ1']]
+  PrivateSubnetAZ2:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: ""
+      CidrBlock: 10.0.4.0/24
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: !Join ['', [!Ref 'TagName', '-PrivateSubnetAZ2']]
+  ECSInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref 'TagName'
+  ECSIGVPCAssociation:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref 'ECSInternetGateway'
+      VpcId: !Ref 'VPC'
+  EIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  NAT:
+    DependsOn: ECSIGVPCAssociation
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+        - EIP
+        - AllocationId
+      SubnetId: !Ref 'PublicSubnetAZ1'
+  ECSRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref 'VPC'
+  ECSPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref 'VPC'
+  ECSRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref 'ECSRouteTable'
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref 'ECSInternetGateway'
+    DependsOn:
+    - ECSIGVPCAssociation
+  ECSNatRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref 'ECSPrivateRouteTable'
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref 'NAT'
+  RoutePublicSubnetAZ1Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        !Ref 'ECSRouteTable'
+      SubnetId:
+        !Ref 'PublicSubnetAZ1'
+  RoutePublicSubnetAZ2Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        !Ref 'ECSRouteTable'
+      SubnetId:
+        !Ref 'PublicSubnetAZ2'
+  RoutePrivateSubnetAZ1Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        !Ref 'ECSPrivateRouteTable'
+      SubnetId:
+        !Ref 'PrivateSubnetAZ1'
+  RoutePrivateSubnetAZ2Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        !Ref 'ECSPrivateRouteTable'
+      SubnetId:
+        !Ref 'PrivateSubnetAZ2'
+  PublicSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public Security Group
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: !Ref 'TagName'
+  PrivateSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Private Security Group
+      VpcId: !Ref 'VPC'
+      Tags:
+        - Key: Name
+          Value: !Ref 'TagName'
+  PublicSecurityGroupHTTPinbound:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref 'PublicSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '80'
+      ToPort: '80'
+      CidrIp: 0.0.0.0/0
+  PublicSecurityGroupSSHinbound:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref 'PublicSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '22'
+      ToPort: '22'
+      CidrIp: 0.0.0.0/0
+  PrivateSecurityGroupHTTPinbound:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref 'PublicSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '80'
+      ToPort: '80'
+      CidrIp: 0.0.0.0/0
+  PrivateSecurityGroupSSHinbound:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref 'PublicSecurityGroup'
+      IpProtocol: tcp
+      FromPort: '22'
+      ToPort: '22'
+      CidrIp: 0.0.0.0/0
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+     ClusterName: !Ref 'ClusterName'
+  ECSAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnetAZ1
+        - !Ref PrivateSubnetAZ2
+      LaunchConfigurationName: !Ref 'ECSAutoscalingLC'
+      MinSize: '1'
+      MaxSize: !Ref 'AsgMaxSize'
+      DesiredCapacity: !Ref 'AsgDesiredCapacity'
+  ECSAutoscalingLC:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      AssociatePublicIpAddress: true
+      ImageId: !FindInMap [AWSRegionToAMI, !Ref 'AWS::Region', AMIID]
+      SecurityGroups:
+        - !Ref PrivateSecurityGroup
+      InstanceType: !Ref 'InstanceType'
+      IamInstanceProfile: !Ref 'EC2InstanceProfile'
+      KeyName: !Ref 'KeyName'
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          echo ECS_CLUSTER=${ECSCluster} >> /etc/ecs/ecs.config
+  CloudwatchLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['-', [NginxLogGroup, !Ref 'AWS::StackName']]
+      RetentionInDays: 14
+  Nginxtaskdefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: Nginx-ng
+      ContainerDefinitions:
+      - Name: nginx
+        Cpu: '10'
+        Essential: 'true'
+        Image: nginx
+        Memory: '128'
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group: !Ref 'CloudwatchLogsGroup'
+            awslogs-region: !Ref 'AWS::Region'
+            awslogs-stream-prefix: nginx
+        PortMappings:
+        - ContainerPort: 80
+          HostPort: 80
+      Volumes:
+      - Name: my-vol
+  NginxService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref 'ClusterName'
+      DesiredCount: '1'
+      TaskDefinition: !Ref 'Nginxtaskdefinition'
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ec2.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+  ECSServicePolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyName: "root"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: ['ecs:*', 'logs:*']
+            Resource: '*'
+      Roles: [!Ref 'EC2Role']
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles: [!Ref 'EC2Role']
+  ECSScaleUpPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName:
+        Ref: ECSAutoScalingGroup
+      Cooldown: '300'
+      ScalingAdjustment: '1'
+  ECSCPUScaleUpAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      EvaluationPeriods: '1'
+      Statistic: Average
+      Threshold: '80'
+      AlarmDescription: Alarm if ECS Cluster CPU reservation goes above 80
+      Period: '300'
+      AlarmActions: [!Ref 'ECSScaleUpPolicy']
+      Namespace: AWS/ECS
+      Dimensions:
+      - Name: ClusterName
+        Value:
+          Ref: ECSCluster
+      ComparisonOperator: GreaterThanThreshold
+      MetricName: CPUReservation
+  ECSMemoryScaleUpAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      EvaluationPeriods: '1'
+      Statistic: Average
+      Threshold: '80'
+      AlarmDescription: Alarm if ECS Cluster Memory reservation goes above 80
+      Period: '300'
+      AlarmActions: [!Ref 'ECSScaleUpPolicy']
+      Namespace: AWS/ECS
+      Dimensions:
+      - Name: ClusterName
+        Value:
+          Ref: ECSCluster
+      ComparisonOperator: GreaterThanThreshold
+      MetricName: MemoryReservation
+  MySNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+      - Endpoint:
+          Ref: Gmail
+        Protocol: email
+  CPUUtilizationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      EvaluationPeriods: '1'
+      Statistic: Average
+      Threshold: '80'
+      AlarmDescription: Alarm if CPUUtilizationAlarm goes above 80
+      Period: '300'
+      AlarmActions: [!Ref 'MySNSTopic']
+      Namespace: AWS/ECS
+      Dimensions:
+      - Name: ClusterName
+        Value:
+          Ref: ECSCluster
+      ComparisonOperator: GreaterThanThreshold
+      MetricName: CPUUtilization
+  MeUtilizationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      EvaluationPeriods: '1'
+      Statistic: Average
+      Threshold: '80'
+      AlarmDescription: Alarm if MeUtilizationAlarm goes above 80
+      Period: '300'
+      AlarmActions: [!Ref 'MySNSTopic']
+      Namespace: AWS/ECS
+      Dimensions:
+      - Name: ClusterName
+        Value:
+          Ref: ECSCluster
+      ComparisonOperator: GreaterThanThreshold
+      MetricName: MeUtilization
+Outputs:
+  Tag:
+    Description: Tag name
+    Value:
+      Ref: TagName
+    Export:
+      Name:
+        Fn::Sub: "${TagName}"
+  VPCId:
+    Description: VPC ID
+    Value:
+      Ref: VPC
+    Export:
+      Name:
+        Fn::Sub: "${TagName}-VpcId"
+  PublicSubnetAZ1:
+    Description: The subnet ID to use for public web servers
+    Value:
+      Ref: PublicSubnetAZ1
+    Export:
+      Name:
+        Fn::Sub: "${TagName}-PublicSubnetAZ1ID"
+  PublicSubnetAZ2:
+    Description: The subnet ID to use for public web servers
+    Value:
+      Ref: PublicSubnetAZ2
+    Export:
+      Name:
+        Fn::Sub: "${TagName}-PublicSubnetAZ2ID"
+  PrivateSubnetAZ1:
+    Description: The subnet ID to use for public web servers
+    Value:
+      Ref: PrivateSubnetAZ1
+    Export:
+      Name:
+        Fn::Sub: "${TagName}-PrivateSubnetAZ1ID"
+  PrivateSubnetAZ2:
+    Description: The subnet ID to use for public web servers
+    Value:
+      Ref: PrivateSubnetAZ2
+    Export:
+      Name:
+        Fn::Sub: "${TagName}-PrivateSubnetAZ2ID"
+  PublicSecurityGroup:
+    Description: The security group ID to use for public servers
+    Value:
+      Fn::GetAtt:
+      - PublicSecurityGroup
+      - GroupId
+    Export:
+      Name:
+        Fn::Sub: "${TagName}-PublicSecurityGroupID"
+  PrivateSecurityGroup:
+    Description: The security group ID to use for private servers
+    Value:
+      Fn::GetAtt:
+      - PrivateSecurityGroup
+      - GroupId
+    Export:
+      Name:
+        Fn::Sub: "${TagName}-PrivateSecurityGroupID"
+  ECSClusterName:
+    Description: ECS Cluster Name
+    Value: !Ref 'ClusterName'
